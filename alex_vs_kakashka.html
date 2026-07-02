@@ -30,10 +30,70 @@
     color: #888;
     font-size: 12px;
   }
+  #stage {
+    position: relative;
+    display: inline-block;
+    line-height: 0;
+  }
+  #nameOverlay {
+    position: absolute;
+    inset: 0;
+    background: rgba(15, 20, 35, 0.82);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 5;
+  }
+  #nameOverlay.hidden { display: none; }
+  .nameBox {
+    text-align: center;
+    padding: 24px 28px;
+    font-family: 'Segoe UI', Tahoma, sans-serif;
+  }
+  .nameBox .nameTitle {
+    color: #fff;
+    font-size: 22px;
+    font-weight: 700;
+    margin-bottom: 18px;
+  }
+  .nameBox input {
+    display: block;
+    width: 220px;
+    max-width: 60vw;
+    margin: 0 auto 16px;
+    padding: 10px 12px;
+    font-size: 16px;
+    border-radius: 8px;
+    border: 2px solid #ffd93d;
+    outline: none;
+    text-align: center;
+    background: #fff;
+    color: #222;
+  }
+  .nameBox button {
+    padding: 10px 28px;
+    font-size: 16px;
+    font-weight: 700;
+    border-radius: 8px;
+    border: none;
+    background: #ffd93d;
+    color: #3a2a00;
+    cursor: pointer;
+  }
+  .nameBox button:active { transform: scale(0.97); }
 </style>
 </head>
 <body>
-<canvas id="game" width="400" height="640"></canvas>
+<div id="stage">
+  <canvas id="game" width="400" height="640"></canvas>
+  <div id="nameOverlay">
+    <div class="nameBox">
+      <div class="nameTitle">Как тебя зовут?</div>
+      <input id="nameInput" type="text" maxlength="14" placeholder="Введите имя" autocomplete="off">
+      <button id="nameBtn">Играть</button>
+    </div>
+  </div>
+</div>
 <div id="hint">Пробел / клик / тап — взлететь</div>
 <script>
 (function(){
@@ -41,6 +101,36 @@
   const ctx = canvas.getContext('2d');
   const W = canvas.width, H = canvas.height;
   const GROUND_H = 90;
+
+  let playerName = 'Рома';
+  let hasSavedName = false;
+  try { const sn = localStorage.getItem('alexPoopName'); if (sn) { playerName = sn; hasSavedName = true; } } catch(e){}
+  document.title = playerName + ' убегает от какашки';
+
+  const nameOverlay = document.getElementById('nameOverlay');
+  const nameInput = document.getElementById('nameInput');
+  const nameBtn = document.getElementById('nameBtn');
+  nameInput.value = playerName;
+  function submitName() {
+    const v = nameInput.value.trim();
+    playerName = v ? v.slice(0, 14) : 'Рома';
+    try { localStorage.setItem('alexPoopName', playerName); } catch(e){}
+    document.title = playerName + ' убегает от какашки';
+    nameOverlay.classList.add('hidden');
+  }
+  function showNameOverlay() {
+    nameInput.value = playerName;
+    nameOverlay.classList.remove('hidden');
+    setTimeout(function(){ nameInput.focus(); nameInput.select(); }, 30);
+  }
+  nameBtn.addEventListener('click', submitName);
+  nameInput.addEventListener('keydown', function(e){ if (e.key === 'Enter') submitName(); });
+
+  if (hasSavedName) {
+    nameOverlay.classList.add('hidden');
+  } else {
+    setTimeout(function(){ nameInput.focus(); nameInput.select(); }, 50);
+  }
 
   const GRAVITY = 1000;
   const FLAP = -360;
@@ -351,6 +441,11 @@
         return;
       }
       if (state === 'ready') {
+        const ndx = pos.x - (W - 62), ndy = pos.y - 26;
+        if (Math.sqrt(ndx*ndx + ndy*ndy) < 20) {
+          showNameOverlay();
+          return;
+        }
         for (let i = 0; i < DIFF_KEYS.length; i++) {
           if (pointInRect(pos.x, pos.y, diffButtonRect(i))) {
             difficulty = DIFF_KEYS[i];
@@ -1074,6 +1169,19 @@
     ctx.restore();
   }
 
+  function drawNameButton() {
+    ctx.save();
+    ctx.translate(W - 62, 26);
+    ctx.fillStyle = 'rgba(0,0,0,0.3)';
+    ctx.beginPath(); ctx.arc(0, 0, 17, 0, Math.PI*2); ctx.fill();
+    ctx.strokeStyle = '#fff'; ctx.lineWidth = 2; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+    ctx.beginPath();
+    ctx.moveTo(-7, 6); ctx.lineTo(-6, 1); ctx.lineTo(5, -10); ctx.lineTo(8, -7); ctx.lineTo(-3, 4); ctx.closePath();
+    ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(3, -8); ctx.lineTo(6, -5); ctx.stroke();
+    ctx.restore();
+  }
+
   function drawDifficultyButtons() {
     for (let i = 0; i < DIFF_KEYS.length; i++) {
       const key = DIFF_KEYS[i];
@@ -1221,10 +1329,11 @@
     }
 
     if (state === 'ready') {
-      drawTextCentered('Рома убегает', 190, 30, '#fff', 'bold', true);
+      drawTextCentered(playerName + ' убегает', 190, 30, '#fff', 'bold', true);
       drawTextCentered('от какашки!', 224, 30, '#fff', 'bold', true);
       drawTextCentered('Тапай, чтобы не упасть', 460, 16, '#fff', '600', true);
       drawDifficultyButtons();
+      drawNameButton();
       if (best > 0) drawTextCentered('Рекорд: ' + best, 40, 16, '#fff2b0', 'bold', true);
     }
 
