@@ -93,6 +93,88 @@
     cursor: pointer;
   }
   .nameBox button:active { transform: translateY(2px); box-shadow: 0 2px 0 #c98a2b, 0 3px 8px rgba(0,0,0,0.3); }
+
+  #leaderboardOverlay {
+    position: absolute;
+    inset: 0;
+    background: rgba(15, 20, 35, 0.85);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 6;
+  }
+  #leaderboardOverlay.hidden { display: none; }
+  .lbBox {
+    text-align: center;
+    padding: 22px 24px;
+    font-family: 'Baloo 2', 'Segoe UI', Tahoma, sans-serif;
+    background: rgba(30, 36, 58, 0.95);
+    border-radius: 20px;
+    box-shadow: 0 12px 34px rgba(0,0,0,0.4);
+    width: 280px;
+    max-width: 82vw;
+    box-sizing: border-box;
+    margin: 0 auto;
+  }
+  .lbBox .lbTitle {
+    color: #ffd93d;
+    font-size: 22px;
+    font-weight: 700;
+    margin-bottom: 14px;
+    text-align: center;
+  }
+  .lbList {
+    max-height: 300px;
+    overflow-y: auto;
+    overflow-x: hidden;
+    margin-bottom: 14px;
+  }
+  .lbHeader, .lbRow {
+    display: grid;
+    grid-template-columns: 24px 1fr auto;
+    align-items: center;
+    column-gap: 10px;
+    width: 100%;
+    box-sizing: border-box;
+  }
+  .lbHeader {
+    padding: 0 10px 6px;
+    color: rgba(255,255,255,0.45);
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+  }
+  .lbHeader span:first-child, .lbRank { text-align: center; }
+  .lbHeader span:last-child, .lbScore { text-align: right; }
+  .lbRow {
+    padding: 7px 10px;
+    border-radius: 8px;
+    color: #fff;
+    font-size: 14px;
+    font-weight: 600;
+  }
+  .lbRow:nth-of-type(odd) { background: rgba(255,255,255,0.05); }
+  .lbRow.lbRowMe { background: rgba(255,217,61,0.25); }
+  .lbRank { color: #ffd93d; font-weight: 700; }
+  .lbName { text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+  .lbScore { color: #7cfc00; font-variant-numeric: tabular-nums; }
+  .lbStatus { color: #ccc; font-size: 14px; margin-bottom: 14px; }
+  .lbStatus.hidden { display: none; }
+  .lbHeader.hidden { display: none; }
+  .lbBox button {
+    padding: 10px 28px;
+    font-family: inherit;
+    font-size: 15px;
+    font-weight: 700;
+    border-radius: 10px;
+    border: none;
+    background: linear-gradient(180deg, #ffe89c, #ffc93d);
+    box-shadow: 0 4px 0 #c98a2b, 0 6px 14px rgba(0,0,0,0.35);
+    color: #3a2a00;
+    cursor: pointer;
+  }
+  .lbBox button:active { transform: translateY(2px); box-shadow: 0 2px 0 #c98a2b, 0 3px 8px rgba(0,0,0,0.3); }
 </style>
 </head>
 <body>
@@ -103,6 +185,15 @@
       <div class="nameTitle">Как тебя зовут?</div>
       <input id="nameInput" type="text" maxlength="14" placeholder="Введите имя" autocomplete="off">
       <button id="nameBtn">Играть</button>
+    </div>
+  </div>
+  <div id="leaderboardOverlay" class="hidden">
+    <div class="lbBox">
+      <div class="lbTitle">🏆 Рейтинг</div>
+      <div id="leaderboardStatus" class="lbStatus hidden"></div>
+      <div id="leaderboardHeader" class="lbHeader hidden"><span>#</span><span>Игрок</span><span>Очки</span></div>
+      <div id="leaderboardList" class="lbList"></div>
+      <button id="leaderboardCloseBtn">Закрыть</button>
     </div>
   </div>
 </div>
@@ -142,6 +233,91 @@
     nameOverlay.classList.add('hidden');
   } else {
     setTimeout(function(){ nameInput.focus(); nameInput.select(); }, 50);
+  }
+
+  // ================================================================
+  // ONLINE LEADERBOARD (Firebase Firestore) — fully additive, optional.
+  // Talks to window.__leaderboard, set up by the <script type="module">
+  // block at the bottom of the page. If that never becomes ready
+  // (empty firebaseConfig, offline, blocked, etc.) everything below
+  // just shows "Рейтинг временно недоступен" — the game itself keeps
+  // working exactly as before either way.
+  // ================================================================
+
+  let playerId = '';
+  try {
+    playerId = localStorage.getItem('alexPoopPlayerId') || '';
+    if (!playerId) {
+      playerId = (window.crypto && crypto.randomUUID) ? crypto.randomUUID() : ('p_' + Date.now() + '_' + Math.random().toString(36).slice(2));
+      localStorage.setItem('alexPoopPlayerId', playerId);
+    }
+  } catch (e) { playerId = 'p_' + Date.now(); }
+
+  let scoreImprovedThisRun = false;
+
+  function syncBestScoreToFirestore() {
+    if (!scoreImprovedThisRun) return;
+    scoreImprovedThisRun = false;
+    try {
+      if (window.__leaderboard && window.__leaderboard.ready) {
+        window.__leaderboard.syncBestScore(playerId, playerName, best).catch(function(){});
+      }
+    } catch (e) {}
+  }
+
+  const leaderboardOverlay = document.getElementById('leaderboardOverlay');
+  const leaderboardList = document.getElementById('leaderboardList');
+  const leaderboardStatus = document.getElementById('leaderboardStatus');
+  const leaderboardHeader = document.getElementById('leaderboardHeader');
+  const leaderboardCloseBtn = document.getElementById('leaderboardCloseBtn');
+
+  function setLeaderboardStatus(text) {
+    if (!text) { leaderboardStatus.classList.add('hidden'); leaderboardStatus.textContent = ''; return; }
+    leaderboardStatus.textContent = text;
+    leaderboardStatus.classList.remove('hidden');
+  }
+
+  function fetchLeaderboard() {
+    leaderboardList.innerHTML = '';
+    leaderboardHeader.classList.add('hidden');
+    if (!window.__leaderboard || !window.__leaderboard.ready) {
+      setLeaderboardStatus('Рейтинг временно недоступен');
+      return;
+    }
+    setLeaderboardStatus('Загрузка...');
+    window.__leaderboard.fetchTop10().then(function(rows) {
+      leaderboardList.innerHTML = '';
+      if (!rows || !rows.length) {
+        setLeaderboardStatus('Пока никто не играл');
+        return;
+      }
+      setLeaderboardStatus('');
+      leaderboardHeader.classList.remove('hidden');
+      rows.forEach(function(d, i) {
+        const row = document.createElement('div');
+        row.className = 'lbRow' + (d.playerId === playerId ? ' lbRowMe' : '');
+        const rankEl = document.createElement('span'); rankEl.className = 'lbRank'; rankEl.textContent = String(i + 1);
+        const nameEl = document.createElement('span'); nameEl.className = 'lbName'; nameEl.textContent = d.name || '???';
+        const scoreEl = document.createElement('span'); scoreEl.className = 'lbScore'; scoreEl.textContent = String(d.bestScore || 0);
+        row.appendChild(rankEl); row.appendChild(nameEl); row.appendChild(scoreEl);
+        leaderboardList.appendChild(row);
+      });
+    }).catch(function() {
+      leaderboardList.innerHTML = '';
+      setLeaderboardStatus('Рейтинг временно недоступен');
+    });
+  }
+
+  function showLeaderboard() {
+    leaderboardOverlay.classList.remove('hidden');
+    fetchLeaderboard();
+  }
+  function hideLeaderboard() {
+    leaderboardOverlay.classList.add('hidden');
+  }
+  if (leaderboardCloseBtn) leaderboardCloseBtn.addEventListener('click', hideLeaderboard);
+  if (leaderboardOverlay) {
+    leaderboardOverlay.addEventListener('click', function(e) { if (e.target === leaderboardOverlay) hideLeaderboard(); });
   }
 
   const GRAVITY = 1000;
@@ -369,6 +545,7 @@
     extraLives = DIFF[difficulty].baseLives;
     poopKnockback = 0;
     rushTimer = 0;
+    scoreImprovedThisRun = false;
     weather = 'clear';
     weatherTimer = 16;
     raindrops = [];
@@ -466,6 +643,8 @@
 
   const SHOP_BTN = { x: W/2 - 110, y: 566, w: 220, h: 34 };
   const SHOP_BACK_BTN = { x: 10, y: 10, w: 76, h: 30 };
+  const RATING_BTN_READY = { x: W/2 - 110, y: 608, w: 220, h: 26 };
+  const RATING_BTN_GAMEOVER = { x: W/2 - 90, y: 360, w: 180, h: 32 };
   function shopCardRect(i) {
     const col = i % 3, row = Math.floor(i / 3);
     const cardW = 110, cardH = 150, gap = 10;
@@ -514,6 +693,16 @@
         }
         if (pointInRect(pos.x, pos.y, SHOP_BTN)) {
           state = 'shop';
+          return;
+        }
+        if (pointInRect(pos.x, pos.y, RATING_BTN_READY)) {
+          showLeaderboard();
+          return;
+        }
+      }
+      if (state === 'gameover') {
+        if (pointInRect(pos.x, pos.y, RATING_BTN_GAMEOVER)) {
+          showLeaderboard();
           return;
         }
       }
@@ -672,7 +861,7 @@
           } else if (multiplier > 1) {
             popups.push({ x: alex.x, y: alex.y - 18, text: '+' + gained, life: 0.8, color: '#ff9f43' });
           }
-          if (score > best) { best = score; try { localStorage.setItem('alexPoopBest', String(best)); } catch(e){} }
+          if (score > best) { best = score; scoreImprovedThisRun = true; try { localStorage.setItem('alexPoopBest', String(best)); } catch(e){} }
           sndScore();
         }
       }
@@ -838,6 +1027,7 @@
       alex.y += 60 * dt;
       if (t >= 1 && poop.catchT > 0.4) {
         state = 'gameover';
+        syncBestScoreToFirestore();
       }
     }
   }
@@ -1752,6 +1942,24 @@
     ], r.x + r.w/2, r.y + r.h/2 + 5);
   }
 
+  function drawRatingButtonReady() {
+    const r = RATING_BTN_READY;
+    drawPanel(r.x, r.y, r.w, r.h, 12, 'rgba(20,24,38,0.55)', 'rgba(255,255,255,0.28)', 2);
+    ctx.fillStyle = '#fff';
+    ctx.font = 'bold 13px "Baloo 2", sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('🏆 Рейтинг', r.x + r.w/2, r.y + r.h/2 + 5);
+  }
+
+  function drawRatingButtonGameover() {
+    const r = RATING_BTN_GAMEOVER;
+    drawPanel(r.x, r.y, r.w, r.h, 12, 'rgba(20,24,38,0.55)', 'rgba(255,255,255,0.28)', 2);
+    ctx.fillStyle = '#fff';
+    ctx.font = 'bold 14px "Baloo 2", sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('🏆 Рейтинг', r.x + r.w/2, r.y + r.h/2 + 5);
+  }
+
   function drawShopCardPreview(x, y, skinId) {
     ctx.save();
     ctx.translate(x, y);
@@ -1965,6 +2173,7 @@
       drawTextCentered('Тапай, чтобы не упасть', 460, 16, '#fff', '600', true);
       drawDifficultyButtons();
       drawShopButton();
+      drawRatingButtonReady();
       drawNameButton();
       if (best > 0) drawTextCentered('Рекорд: ' + best, 40, 16, '#fff2b0', 'bold', true);
     }
@@ -1984,6 +2193,7 @@
         { type: 'text', value: 'Монеты: ' + coinCount, font: 'bold 17px "Baloo 2", sans-serif', color: '#ffd93d' }
       ], W/2, 310);
       drawTextCentered('Рекорд: ' + best, 338, 18, '#fff2b0', 'bold', true);
+      drawRatingButtonGameover();
       drawTextCentered('Нажми, чтобы попробовать снова', 430, 15, '#fff', '600');
     }
 
@@ -2391,6 +2601,73 @@
   resetGame();
   requestAnimationFrame(frameLoop);
 })();
+</script>
+
+<script type="module">
+  // ================================================================
+  // Firebase Firestore leaderboard — loaded as an ES module straight
+  // from Google's CDN. No npm, no bundler, works as-is on GitHub Pages.
+  // This exposes a tiny window.__leaderboard API that the main game
+  // script (a classic script above) calls into. If firebaseConfig is
+  // left empty below, or anything here fails (offline, blocked,
+  // misconfigured project, etc.), window.__leaderboard.ready stays
+  // false and the game shows "Рейтинг временно недоступен" — the
+  // game itself is completely unaffected either way.
+  // ================================================================
+  window.__leaderboard = {
+    ready: false,
+    syncBestScore: async function () {},
+    fetchTop10: async function () { throw new Error('unavailable'); }
+  };
+
+  try {
+    const { initializeApp } = await import('https://www.gstatic.com/firebasejs/12.15.0/firebase-app.js');
+    const {
+      getFirestore, doc, setDoc, serverTimestamp,
+      collection, query, orderBy, limit, getDocs
+    } = await import('https://www.gstatic.com/firebasejs/12.15.0/firebase-firestore.js');
+
+    // TODO: вставь сюда свой firebaseConfig из консоли Firebase
+    // (Project settings → General → "Your apps" → SDK setup and configuration)
+    const firebaseConfig = {
+      apiKey: "AIzaSyAvJ-UTHuz8A2BtskiOWwWcwVc7byZeuqA",
+      authDomain: "kakashka73-31351.firebaseapp.com",
+      projectId: "kakashka73-31351",
+      storageBucket: "kakashka73-31351.firebasestorage.app",
+      messagingSenderId: "814352408663",
+      appId: "1:814352408663:web:895c80dcea83431c860312"
+    };
+
+    if (firebaseConfig && firebaseConfig.apiKey) {
+      const app = initializeApp(firebaseConfig);
+      const db = getFirestore(app);
+
+      window.__leaderboard = {
+        ready: true,
+        syncBestScore: async function (playerId, name, bestScore) {
+          await setDoc(doc(db, 'scores', playerId), {
+            playerId: playerId,
+            name: name,
+            bestScore: bestScore,
+            updatedAt: serverTimestamp()
+          }, { merge: true });
+        },
+        fetchTop10: async function () {
+          const q = query(collection(db, 'scores'), orderBy('bestScore', 'desc'), limit(10));
+          const snap = await getDocs(q);
+          const rows = [];
+          snap.forEach(function (d) { rows.push(d.data()); });
+          return rows;
+        }
+      };
+    }
+  } catch (e) {
+    window.__leaderboard = {
+      ready: false,
+      syncBestScore: async function () {},
+      fetchTop10: async function () { throw e; }
+    };
+  }
 </script>
 </body>
 </html>
