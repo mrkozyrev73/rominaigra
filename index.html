@@ -4,13 +4,16 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
 <title>Рома убегает от какашки</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Baloo+2:wght@500;600;700;800&display=swap" rel="stylesheet">
 <style>
   html, body {
     margin: 0; padding: 0; height: 100%;
     background: #1a1a2e;
     display: flex; align-items: center; justify-content: center;
     overflow: hidden;
-    font-family: 'Segoe UI', Tahoma, sans-serif;
+    font-family: 'Baloo 2', 'Segoe UI', Tahoma, sans-serif;
     touch-action: manipulation;
   }
   #game {
@@ -29,6 +32,7 @@
     text-align: center;
     color: #888;
     font-size: 12px;
+    font-weight: 600;
   }
   #stage {
     position: relative;
@@ -47,23 +51,29 @@
   #nameOverlay.hidden { display: none; }
   .nameBox {
     text-align: center;
-    padding: 24px 28px;
-    font-family: 'Segoe UI', Tahoma, sans-serif;
+    padding: 28px 32px;
+    font-family: 'Baloo 2', 'Segoe UI', Tahoma, sans-serif;
+    background: rgba(30, 36, 58, 0.6);
+    border-radius: 20px;
+    box-shadow: 0 12px 34px rgba(0,0,0,0.4);
   }
   .nameBox .nameTitle {
     color: #fff;
-    font-size: 22px;
+    font-size: 24px;
     font-weight: 700;
     margin-bottom: 18px;
+    letter-spacing: 0.3px;
   }
   .nameBox input {
     display: block;
     width: 220px;
     max-width: 60vw;
     margin: 0 auto 16px;
-    padding: 10px 12px;
+    padding: 11px 14px;
+    font-family: inherit;
     font-size: 16px;
-    border-radius: 8px;
+    font-weight: 600;
+    border-radius: 10px;
     border: 2px solid #ffd93d;
     outline: none;
     text-align: center;
@@ -71,16 +81,18 @@
     color: #222;
   }
   .nameBox button {
-    padding: 10px 28px;
+    padding: 11px 30px;
+    font-family: inherit;
     font-size: 16px;
     font-weight: 700;
-    border-radius: 8px;
+    border-radius: 10px;
     border: none;
-    background: #ffd93d;
+    background: linear-gradient(180deg, #ffe89c, #ffc93d);
+    box-shadow: 0 4px 0 #c98a2b, 0 6px 14px rgba(0,0,0,0.35);
     color: #3a2a00;
     cursor: pointer;
   }
-  .nameBox button:active { transform: scale(0.97); }
+  .nameBox button:active { transform: translateY(2px); box-shadow: 0 2px 0 #c98a2b, 0 3px 8px rgba(0,0,0,0.3); }
 </style>
 </head>
 <body>
@@ -363,6 +375,14 @@
     popups = [];
     banners = [];
     particles = [];
+    // boss module: clear any in-progress fight on a fresh run
+    bossActive = false;
+    boss = null;
+    bossOutro = null;
+    bossIndex = 0;
+    bossBullets = []; bossWalls = []; bossPickups = [];
+    playerBullets = [];
+    playerAtkBoost = 0; playerBigShotReady = false;
     let startX = W + 60;
     for (let i = 0; i < 4; i++) {
       spawnPipe(startX + i * SPACING);
@@ -543,6 +563,17 @@
   window.addEventListener('keydown', function(e){
     if (e.code === 'Space' || e.code === 'ArrowUp') { e.preventDefault(); handleInput(); }
   });
+  // ---- BOSS MODULE debug trigger (temporary, for isolated testing only) ----
+  // Press "B" any time during normal play to preview the boss overlay — the
+  // normal pipes/scoring/controls keep running exactly as before, the boss
+  // just shows up alongside them. Not wired to the real 100-score milestone
+  // yet — see startBossBattle().
+  window.addEventListener('keydown', function(e){
+    if (e.code === 'KeyB' && (state === 'playing' || state === 'ready')) {
+      if (state === 'ready') state = 'playing';
+      startBossBattle();
+    }
+  });
 
   // ---------- update ----------
   function update(dt) {
@@ -563,7 +594,6 @@
       pt.life -= dt;
       if (pt.life <= 0) particles.splice(i, 1);
     }
-
     if (state === 'ready') {
       alex.y = H/2 + Math.sin(frame * 0.05) * 10;
       alex.rot = Math.sin(frame * 0.05) * 0.05;
@@ -613,9 +643,13 @@
           const newMult = Math.min(COMBO_MAX_MULT, 1 + Math.floor(combo / COMBO_STEP));
           if (newMult > multiplier) {
             multiplier = newMult;
+            const comboCoins = multiplier * 3;
+            wallet += comboCoins;
+            saveWallet();
             sndCombo();
             vib(30);
-            popups.push({ x: alex.x, y: alex.y - 42, text: 'КОМБО x' + multiplier + '!', life: 1.2, color: '#ff9f43' });
+            spawnBurst(alex.x, alex.y - 20, '#ff9f43', 10);
+            popups.push({ x: alex.x, y: alex.y - 42, text: 'КОМБО x' + multiplier + '! +' + comboCoins + ' монет', life: 1.3, color: '#ff9f43' });
           }
           const gained = (p.golden ? GOLDEN_SCORE : 1) * multiplier;
           const prevScore = score;
@@ -625,12 +659,18 @@
             sndPunch();
             vib([30, 40, 30, 40, 30]);
             banners.push({ text: 'ОНА СОВСЕМ РЯДОМ!', life: 1.9, color: '#ff3b3b' });
+            // boss module: every 100 score, the boss slides in on top of the
+            // ongoing run (startBossBattle's own intro is the smooth part —
+            // it glides in over ~1s before it can attack)
+            if (!bossActive) startBossBattle();
           }
           if (p.golden) {
             sndGolden();
             vib([20, 30, 20]);
             spawnBurst(alex.x, alex.y, '#ffd93d', 14);
             popups.push({ x: alex.x, y: alex.y - 18, text: '+' + gained, life: 1.1, color: '#ffd93d' });
+          } else if (multiplier > 1) {
+            popups.push({ x: alex.x, y: alex.y - 18, text: '+' + gained, life: 0.8, color: '#ff9f43' });
           }
           if (score > best) { best = score; try { localStorage.setItem('alexPoopBest', String(best)); } catch(e){} }
           sndScore();
@@ -783,6 +823,11 @@
         if (raindrops[i].y > H - GROUND_H) raindrops.splice(i, 1);
       }
 
+      // boss module: overlay logic only (boss AI, its own hazards, pickups,
+      // player auto-fire) — normal pipes/scoring/collision above are
+      // completely untouched and keep running exactly as before
+      if (bossActive) updateBossOverlay(dt);
+
       frame++;
     } else if (state === 'caught') {
       poop.catchT += dt;
@@ -798,6 +843,145 @@
   }
 
   // ---------- drawing ----------
+
+  // -- polished UI chrome helpers (panels/menus/HUD only — the game world stays pixel-art) --
+  function roundRectPath(x, y, w, h, r) {
+    if (r > w/2) r = w/2;
+    if (r > h/2) r = h/2;
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.arcTo(x + w, y, x + w, y + h, r);
+    ctx.arcTo(x + w, y + h, x, y + h, r);
+    ctx.arcTo(x, y + h, x, y, r);
+    ctx.arcTo(x, y, x + w, y, r);
+    ctx.closePath();
+  }
+  function drawPanel(x, y, w, h, r, fill, stroke, lw) {
+    ctx.save();
+    ctx.shadowColor = 'rgba(0,0,0,0.4)';
+    ctx.shadowBlur = 10;
+    ctx.shadowOffsetY = 3;
+    roundRectPath(x, y, w, h, r);
+    ctx.fillStyle = fill;
+    ctx.fill();
+    ctx.shadowColor = 'transparent';
+    ctx.shadowBlur = 0;
+    ctx.shadowOffsetY = 0;
+    // subtle inner top highlight for a glossy feel
+    ctx.save();
+    roundRectPath(x, y, w, h, r);
+    ctx.clip();
+    const sheen = ctx.createLinearGradient(x, y, x, y + h * 0.55);
+    sheen.addColorStop(0, 'rgba(255,255,255,0.14)');
+    sheen.addColorStop(1, 'rgba(255,255,255,0)');
+    ctx.fillStyle = sheen;
+    ctx.fillRect(x, y, w, h * 0.55);
+    ctx.restore();
+    if (stroke) {
+      ctx.strokeStyle = stroke;
+      ctx.lineWidth = lw || 2;
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+  function glassCircle(r, tint) {
+    ctx.save();
+    ctx.shadowColor = 'rgba(0,0,0,0.35)';
+    ctx.shadowBlur = 7;
+    ctx.shadowOffsetY = 2;
+    const g = ctx.createRadialGradient(-r*0.3, -r*0.35, r*0.1, 0, 0, r*1.1);
+    g.addColorStop(0, tint || 'rgba(255,255,255,0.32)');
+    g.addColorStop(0.45, 'rgba(255,255,255,0.1)');
+    g.addColorStop(1, 'rgba(0,0,0,0.42)');
+    ctx.fillStyle = g;
+    ctx.beginPath(); ctx.arc(0, 0, r, 0, Math.PI*2); ctx.fill();
+    ctx.restore();
+    ctx.strokeStyle = 'rgba(255,255,255,0.4)';
+    ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.arc(0, 0, r, 0, Math.PI*2); ctx.stroke();
+  }
+  function drawHeartIcon(x, y, r, color) {
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.scale(r/11, r/11);
+    ctx.fillStyle = color || '#ff6b81';
+    ctx.beginPath();
+    ctx.moveTo(0, 8);
+    ctx.bezierCurveTo(-11, -1, -9, -11, -1, -11);
+    ctx.bezierCurveTo(3, -11, 4, -7, 0, -3);
+    ctx.bezierCurveTo(-4, -7, -3, -11, 1, -11);
+    ctx.bezierCurveTo(9, -11, 11, -1, 0, 8);
+    ctx.closePath();
+    ctx.fill();
+    ctx.fillStyle = 'rgba(255,255,255,0.4)';
+    ctx.beginPath(); ctx.ellipse(-3, -6, 2, 3, -0.5, 0, Math.PI*2); ctx.fill();
+    ctx.restore();
+  }
+  function drawShieldGlyph(x, y, r, color) {
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.scale(r/9, r/9);
+    ctx.fillStyle = color || '#ffd93d';
+    ctx.beginPath();
+    ctx.moveTo(0, -9);
+    ctx.lineTo(7, -5);
+    ctx.lineTo(7, 4);
+    ctx.quadraticCurveTo(0, 11, 0, 11);
+    ctx.quadraticCurveTo(0, 11, -7, 4);
+    ctx.lineTo(-7, -5);
+    ctx.closePath();
+    ctx.fill();
+    ctx.fillStyle = 'rgba(255,255,255,0.55)';
+    ctx.beginPath();
+    ctx.moveTo(0, -6);
+    ctx.lineTo(4, -3.5);
+    ctx.lineTo(4, 2);
+    ctx.quadraticCurveTo(0, 7, 0, 7);
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+  }
+  function drawDashGlyph(x, y, r, color) {
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.scale(r/9, r/9);
+    ctx.fillStyle = color || '#ff9f43';
+    ctx.beginPath();
+    ctx.moveTo(-2, -10);
+    ctx.lineTo(6, -1);
+    ctx.lineTo(1, -1);
+    ctx.lineTo(3, 10);
+    ctx.lineTo(-6, 0);
+    ctx.lineTo(-1, 0);
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+  }
+  function drawWidenGlyph(x, y, r, color) {
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.scale(r/9, r/9);
+    ctx.strokeStyle = color || '#5fe3ff'; ctx.lineWidth = 2.5; ctx.lineCap = 'round';
+    ctx.beginPath(); ctx.moveTo(-8, 0); ctx.lineTo(8, 0); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(-8, 0); ctx.lineTo(-3, -4); ctx.moveTo(-8, 0); ctx.lineTo(-3, 4); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(8, 0); ctx.lineTo(3, -4); ctx.moveTo(8, 0); ctx.lineTo(3, 4); ctx.stroke();
+    ctx.restore();
+  }
+  function drawMagnetGlyph(x, y, r, color) {
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.scale(r/9, r/9);
+    const c = color || '#c77dff';
+    ctx.strokeStyle = '#fff'; ctx.lineWidth = 3; ctx.lineCap = 'round';
+    ctx.beginPath(); ctx.arc(0, 2, 7, Math.PI, 0); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(-7, 2); ctx.lineTo(-7, 8); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(7, 2); ctx.lineTo(7, 8); ctx.stroke();
+    ctx.strokeStyle = c; ctx.lineWidth = 2.5;
+    ctx.beginPath(); ctx.moveTo(-7, 8); ctx.lineTo(-3.5, 8); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(7, 8); ctx.lineTo(3.5, 8); ctx.stroke();
+    ctx.restore();
+  }
+
   function drawSky() {
     const colors = skyColors();
     const g = ctx.createLinearGradient(0, 0, 0, H);
@@ -1014,7 +1198,7 @@
       ctx.closePath();
       ctx.fill();
       ctx.fillStyle = '#ffd93d';
-      ctx.font = 'bold 10px sans-serif';
+      ctx.font = 'bold 10px "Baloo 2", sans-serif';
       ctx.textAlign = 'center';
       ctx.fillText('★', 0, 4);
     } else if (type === 'widen') {
@@ -1103,6 +1287,13 @@
     }
     return total - gap;
   }
+  const ICON_GLYPHS = {
+    heart: drawHeartIcon,
+    shield: drawShieldGlyph,
+    dash: drawDashGlyph,
+    widen: drawWidenGlyph,
+    magnet: drawMagnetGlyph
+  };
   function drawIconParts(parts, x, y) {
     const gap = 4;
     for (let i = 0; i < parts.length; i++) {
@@ -1111,6 +1302,9 @@
         ctx.font = p.font; ctx.textAlign = 'left'; ctx.fillStyle = p.color;
         ctx.fillText(p.value, x, y);
         x += ctx.measureText(p.value).width + gap;
+      } else if (ICON_GLYPHS[p.type]) {
+        ICON_GLYPHS[p.type](x + p.r, y - p.r*0.75, p.r, p.color);
+        x += p.r * 2 + gap;
       } else {
         drawCoinIcon(x + p.r, y - p.r*0.75, p.r);
         x += p.r * 2 + gap;
@@ -1152,7 +1346,7 @@
     // coin emblem (simple star, only visible when facing us enough)
     if (squash > 0.55) {
       ctx.fillStyle = 'rgba(200,134,15,0.8)';
-      ctx.font = 'bold 8px sans-serif';
+      ctx.font = 'bold 8px "Baloo 2", sans-serif';
       ctx.textAlign = 'center';
       ctx.fillText('★', 0.3, 3.2);
     }
@@ -1462,7 +1656,15 @@
   }
 
   function drawTextCentered(text, y, size, color, weight, noShadow) {
-    ctx.font = (weight || 'bold') + ' ' + size + 'px "Segoe UI", sans-serif';
+    const maxW = W - 24;
+    let fontSize = size;
+    ctx.font = (weight || 'bold') + ' ' + fontSize + 'px "Baloo 2", "Segoe UI", sans-serif';
+    // auto-shrink so long strings never overflow the canvas width
+    let w = ctx.measureText(text).width;
+    if (w > maxW) {
+      fontSize = Math.max(10, Math.floor(size * (maxW / w)));
+      ctx.font = (weight || 'bold') + ' ' + fontSize + 'px "Baloo 2", "Segoe UI", sans-serif';
+    }
     ctx.textAlign = 'center';
     if (!noShadow) {
       ctx.fillStyle = 'rgba(0,0,0,0.35)';
@@ -1472,11 +1674,22 @@
     ctx.fillText(text, W/2, y);
   }
 
+  // shared by both banner popups (normal mode + boss mode) so long strings
+  // like boss names never stick out past the rounded panel behind them
+  function setBannerFont(text, maxW, baseSize) {
+    let size = baseSize;
+    ctx.font = 'bold ' + size + 'px "Baloo 2", "Segoe UI", sans-serif';
+    const w = ctx.measureText(text).width;
+    if (w > maxW) {
+      size = Math.max(11, Math.floor(baseSize * (maxW / w)));
+      ctx.font = 'bold ' + size + 'px "Baloo 2", "Segoe UI", sans-serif';
+    }
+  }
+
   function drawMuteButton() {
     ctx.save();
     ctx.translate(W - 26, 26);
-    ctx.fillStyle = 'rgba(0,0,0,0.3)';
-    ctx.beginPath(); ctx.arc(0, 0, 17, 0, Math.PI*2); ctx.fill();
+    glassCircle(17);
     ctx.fillStyle = '#fff';
     ctx.beginPath();
     ctx.moveTo(-7, -3); ctx.lineTo(-3, -3); ctx.lineTo(3, -8); ctx.lineTo(3, 8); ctx.lineTo(-3, 3); ctx.lineTo(-7, 3);
@@ -1495,8 +1708,7 @@
   function drawNameButton() {
     ctx.save();
     ctx.translate(W - 62, 26);
-    ctx.fillStyle = 'rgba(0,0,0,0.3)';
-    ctx.beginPath(); ctx.arc(0, 0, 17, 0, Math.PI*2); ctx.fill();
+    glassCircle(17);
     ctx.strokeStyle = '#fff'; ctx.lineWidth = 2; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
     ctx.beginPath();
     ctx.moveTo(-7, 6); ctx.lineTo(-6, 1); ctx.lineTo(5, -10); ctx.lineTo(8, -7); ctx.lineTo(-3, 4); ctx.closePath();
@@ -1510,13 +1722,18 @@
       const key = DIFF_KEYS[i];
       const r = diffButtonRect(i);
       const active = key === difficulty;
-      ctx.fillStyle = active ? 'rgba(255,217,61,0.85)' : 'rgba(0,0,0,0.35)';
-      ctx.fillRect(r.x, r.y, r.w, r.h);
-      ctx.strokeStyle = active ? '#ffd93d' : 'rgba(255,255,255,0.4)';
-      ctx.lineWidth = 2;
-      ctx.strokeRect(r.x, r.y, r.w, r.h);
+      let fill;
+      if (active) {
+        const g = ctx.createLinearGradient(r.x, r.y, r.x, r.y + r.h);
+        g.addColorStop(0, '#ffe89c');
+        g.addColorStop(1, '#e8b923');
+        fill = g;
+      } else {
+        fill = 'rgba(20,24,38,0.55)';
+      }
+      drawPanel(r.x, r.y, r.w, r.h, 14, fill, active ? '#ffd93d' : 'rgba(255,255,255,0.28)', 2);
       ctx.fillStyle = active ? '#3a2a00' : '#fff';
-      ctx.font = 'bold 14px sans-serif';
+      ctx.font = 'bold 15px "Baloo 2", sans-serif';
       ctx.textAlign = 'center';
       ctx.fillText(DIFF[key].label, r.x + r.w/2, r.y + r.h/2 + 5);
     }
@@ -1524,18 +1741,14 @@
 
   function drawShopButton() {
     const r = SHOP_BTN;
-    ctx.fillStyle = 'rgba(0,0,0,0.35)';
-    ctx.fillRect(r.x, r.y, r.w, r.h);
-    ctx.strokeStyle = 'rgba(255,255,255,0.4)';
-    ctx.lineWidth = 2;
-    ctx.strokeRect(r.x, r.y, r.w, r.h);
+    drawPanel(r.x, r.y, r.w, r.h, 14, 'rgba(20,24,38,0.55)', 'rgba(255,255,255,0.28)', 2);
     ctx.fillStyle = '#fff';
-    ctx.font = 'bold 14px sans-serif';
+    ctx.font = 'bold 15px "Baloo 2", sans-serif';
     ctx.textAlign = 'center';
     drawIconPartsCentered([
-      { type: 'text', value: '🎨 Скины  ·', font: 'bold 14px sans-serif', color: '#fff' },
+      { type: 'text', value: '🎨 Скины  ·', font: 'bold 15px "Baloo 2", sans-serif', color: '#fff' },
       { type: 'coin', r: 7 },
-      { type: 'text', value: String(wallet), font: 'bold 14px sans-serif', color: '#ffd93d' }
+      { type: 'text', value: String(wallet), font: 'bold 15px "Baloo 2", sans-serif', color: '#ffd93d' }
     ], r.x + r.w/2, r.y + r.h/2 + 5);
   }
 
@@ -1548,18 +1761,19 @@
   }
 
   function drawShop() {
-    ctx.fillStyle = '#12182b';
+    const bg = ctx.createLinearGradient(0, 0, 0, H);
+    bg.addColorStop(0, '#181f38');
+    bg.addColorStop(1, '#0d1120');
+    ctx.fillStyle = bg;
     ctx.fillRect(0, 0, W, H);
     ctx.fillStyle = '#fff';
-    ctx.font = 'bold 22px "Segoe UI", sans-serif';
+    ctx.font = 'bold 24px "Baloo 2", "Segoe UI", sans-serif';
     ctx.textAlign = 'center';
-    ctx.fillText('Скины', W/2, 45);
-    ctx.font = 'bold 15px sans-serif';
-    ctx.fillStyle = '#ffd93d';
+    ctx.fillText('Скины', W/2, 46);
     drawIconPartsCentered([
       { type: 'coin', r: 9 },
-      { type: 'text', value: String(wallet), font: 'bold 15px sans-serif', color: '#ffd93d' }
-    ], W/2, 72);
+      { type: 'text', value: String(wallet), font: 'bold 16px "Baloo 2", sans-serif', color: '#ffd93d' }
+    ], W/2, 73);
 
     for (let i = 0; i < SKINS.length; i++) {
       const skin = SKINS[i];
@@ -1567,11 +1781,10 @@
       const unlocked = unlockedSkins.indexOf(skin.id) !== -1;
       const active = skin.id === currentSkin;
 
-      ctx.fillStyle = active ? 'rgba(255,217,61,0.22)' : 'rgba(255,255,255,0.06)';
-      ctx.fillRect(r.x, r.y, r.w, r.h);
-      ctx.strokeStyle = active ? '#ffd93d' : 'rgba(255,255,255,0.25)';
-      ctx.lineWidth = active ? 3 : 1.5;
-      ctx.strokeRect(r.x, r.y, r.w, r.h);
+      drawPanel(r.x, r.y, r.w, r.h, 16,
+        active ? 'rgba(255,217,61,0.2)' : 'rgba(255,255,255,0.07)',
+        active ? '#ffd93d' : 'rgba(255,255,255,0.22)',
+        active ? 3 : 1.5);
 
       if (!unlocked) {
         ctx.save();
@@ -1583,34 +1796,31 @@
       }
 
       ctx.fillStyle = '#fff';
-      ctx.font = 'bold 13px sans-serif';
+      ctx.font = 'bold 14px "Baloo 2", sans-serif';
       ctx.textAlign = 'center';
       ctx.fillText(skin.name, r.x + r.w/2, r.y + r.h - 34);
 
       if (active) {
         ctx.fillStyle = '#ffd93d';
-        ctx.font = 'bold 12px sans-serif';
+        ctx.font = 'bold 12px "Baloo 2", sans-serif';
         ctx.fillText('Выбрано', r.x + r.w/2, r.y + r.h - 14);
       } else if (unlocked) {
         ctx.fillStyle = '#7cfc00';
-        ctx.font = 'bold 12px sans-serif';
+        ctx.font = 'bold 12px "Baloo 2", sans-serif';
         ctx.fillText('Выбрать', r.x + r.w/2, r.y + r.h - 14);
       } else {
         drawIconPartsCentered([
           { type: 'coin', r: 7 },
-          { type: 'text', value: String(skin.cost), font: 'bold 12px sans-serif', color: wallet >= skin.cost ? '#5fe3ff' : '#888' }
+          { type: 'text', value: String(skin.cost), font: 'bold 12px "Baloo 2", sans-serif', color: wallet >= skin.cost ? '#5fe3ff' : '#888' }
         ], r.x + r.w/2, r.y + r.h - 14);
       }
     }
 
     const b = SHOP_BACK_BTN;
-    ctx.fillStyle = 'rgba(0,0,0,0.35)';
-    ctx.fillRect(b.x, b.y, b.w, b.h);
-    ctx.strokeStyle = 'rgba(255,255,255,0.4)';
-    ctx.lineWidth = 2;
-    ctx.strokeRect(b.x, b.y, b.w, b.h);
+    drawPanel(b.x, b.y, b.w, b.h, 12, 'rgba(20,24,38,0.6)', 'rgba(255,255,255,0.3)', 2);
     ctx.fillStyle = '#fff';
-    ctx.font = 'bold 13px sans-serif';
+    ctx.font = 'bold 14px "Baloo 2", sans-serif';
+    ctx.textAlign = 'center';
     ctx.fillText('← Назад', b.x + b.w/2, b.y + b.h/2 + 5);
   }
 
@@ -1668,6 +1878,8 @@
       ctx.restore();
     }
     drawCharacter(alex.x, alex.y, alex.rot, currentSkin);
+    // boss module: boss/bullets/hazards/pickups drawn on top of the ongoing scene
+    if (bossActive) renderBossOverlay();
 
     for (let i = 0; i < particles.length; i++) {
       const pt = particles[i];
@@ -1682,7 +1894,7 @@
       const pu = popups[i];
       ctx.save();
       ctx.globalAlpha = clamp(pu.life / 1.1, 0, 1);
-      ctx.font = 'bold 18px sans-serif';
+      ctx.font = 'bold 18px "Baloo 2", sans-serif';
       ctx.textAlign = 'center';
       ctx.fillStyle = pu.color;
       ctx.fillText(pu.text, pu.x, pu.y);
@@ -1698,31 +1910,36 @@
       }
       drawIconParts([
         { type: 'coin', r: 8 },
-        { type: 'text', value: String(coinCount), font: 'bold 15px sans-serif', color: '#ffd93d' }
+        { type: 'text', value: String(coinCount), font: 'bold 15px "Baloo 2", sans-serif', color: '#ffd93d' }
       ], 12, H - GROUND_H - 10);
       if (extraLives > 0) {
-        ctx.fillStyle = '#ff6b81';
-        ctx.fillText('❤️ x' + extraLives, 12, H - GROUND_H - 32);
+        drawIconParts([
+          { type: 'heart', r: 9, color: '#ff6b81' },
+          { type: 'text', value: 'x' + extraLives, font: 'bold 15px "Baloo 2", sans-serif', color: '#ff6b81' }
+        ], 12, H - GROUND_H - 32);
       }
 
       let hudY = 30;
       if (invincibleTimer > 0) {
-        ctx.textAlign = 'left';
-        ctx.font = 'bold 15px sans-serif';
-        ctx.fillStyle = dashTimer > 0 ? '#ff9f43' : '#ffd93d';
-        ctx.fillText((dashTimer > 0 ? '⚡ ' : '🛡 ') + invincibleTimer.toFixed(1) + 'с', 12, hudY);
+        const buffColor = dashTimer > 0 ? '#ff9f43' : '#ffd93d';
+        drawIconParts([
+          { type: dashTimer > 0 ? 'dash' : 'shield', r: 9, color: buffColor },
+          { type: 'text', value: invincibleTimer.toFixed(1) + ' с', font: 'bold 15px "Baloo 2", sans-serif', color: buffColor }
+        ], 12, hudY);
       }
       if (widenTimer > 0) {
-        ctx.textAlign = 'right';
-        ctx.font = 'bold 15px sans-serif';
-        ctx.fillStyle = '#5fe3ff';
-        ctx.fillText(widenTimer.toFixed(1) + 'с ↔', W - 12, hudY);
+        const parts = [
+          { type: 'widen', r: 9, color: '#5fe3ff' },
+          { type: 'text', value: widenTimer.toFixed(1) + ' с', font: 'bold 15px "Baloo 2", sans-serif', color: '#5fe3ff' }
+        ];
+        drawIconParts(parts, W - 12 - measureIconParts(parts), hudY);
       }
       if (magnetTimer > 0) {
-        ctx.textAlign = 'right';
-        ctx.font = 'bold 15px sans-serif';
-        ctx.fillStyle = '#c77dff';
-        ctx.fillText(magnetTimer.toFixed(1) + 'с 🧲', W - 12, hudY + 22);
+        const parts = [
+          { type: 'magnet', r: 9, color: '#c77dff' },
+          { type: 'text', value: magnetTimer.toFixed(1) + ' с', font: 'bold 15px "Baloo 2", sans-serif', color: '#c77dff' }
+        ];
+        drawIconParts(parts, W - 12 - measureIconParts(parts), hudY + 24);
       }
 
       for (let i = 0; i < banners.length; i++) {
@@ -1733,12 +1950,11 @@
         ctx.globalAlpha = a;
         ctx.translate(W/2, 160);
         ctx.scale(scaleB, scaleB);
-        ctx.font = 'bold 30px "Segoe UI", sans-serif';
+        drawPanel(-130, -28, 260, 44, 16, 'rgba(15,18,32,0.72)', 'rgba(255,255,255,0.25)', 2);
+        setBannerFont(b.text, 230, 20);
         ctx.textAlign = 'center';
-        ctx.fillStyle = 'rgba(0,0,0,0.4)';
-        ctx.fillRect(-110, -30, 220, 44);
         ctx.fillStyle = b.color;
-        ctx.fillText(b.text, 2, 2);
+        ctx.fillText(b.text, 0, 0);
         ctx.restore();
       }
     }
@@ -1754,16 +1970,21 @@
     }
 
     if (state === 'gameover') {
-      ctx.fillStyle = 'rgba(0,0,0,0.45)';
+      ctx.fillStyle = 'rgba(0,0,0,0.5)';
       ctx.fillRect(0, 0, W, H);
-      drawTextCentered('ПОЙМАЛА!', 230, 40, '#ff6b6b');
-      drawTextCentered('Счёт: ' + score, 288, 24, '#fff');
+      const cardW = 260, cardH = 210, cardX = W/2 - cardW/2, cardY = 195;
+      const cardBg = ctx.createLinearGradient(0, cardY, 0, cardY + cardH);
+      cardBg.addColorStop(0, 'rgba(32,26,46,0.9)');
+      cardBg.addColorStop(1, 'rgba(18,15,28,0.92)');
+      drawPanel(cardX, cardY, cardW, cardH, 20, cardBg, 'rgba(255,255,255,0.18)', 2);
+      drawTextCentered('ПОЙМАЛА!', 235, 36, '#ff6b6b', 'bold', true);
+      drawTextCentered('Счёт: ' + score, 280, 22, '#fff', 'bold', true);
       drawIconPartsCentered([
         { type: 'coin', r: 9 },
-        { type: 'text', value: 'Монеты: ' + coinCount, font: 'bold 18px sans-serif', color: '#ffd93d' }
-      ], W/2, 318);
-      drawTextCentered('Рекорд: ' + best, 348, 20, '#fff2b0');
-      drawTextCentered('Нажми, чтобы попробовать снова', 400, 16, '#fff', '600');
+        { type: 'text', value: 'Монеты: ' + coinCount, font: 'bold 17px "Baloo 2", sans-serif', color: '#ffd93d' }
+      ], W/2, 310);
+      drawTextCentered('Рекорд: ' + best, 338, 18, '#fff2b0', 'bold', true);
+      drawTextCentered('Нажми, чтобы попробовать снова', 430, 15, '#fff', '600');
     }
 
     if (state === 'shop') {
@@ -1771,6 +1992,391 @@
     }
 
     drawMuteButton();
+  }
+
+  // ================================================================
+  // BOSS BATTLE MODULE v2 — runs as an OVERLAY on top of normal play.
+  // Normal pipes, scoring, ground/ceiling collision and the extra-life
+  // system are completely untouched and keep running the whole time
+  // (state stays 'playing'); the boss just shows up alongside them and
+  // adds its own hazards + auto-fire damage race. Any hit from a boss
+  // hazard reuses the existing triggerCaught()/extraLives/invincibleTimer
+  // flow, so it's exactly as fair (and exactly as lethal on the ground)
+  // as the rest of the game.
+  // DEBUG TRIGGER: press "B" during a normal run to preview a fight.
+  // Real integration (every 100 score) is not wired yet — call
+  // startBossBattle() from the scoring code once you're happy with it.
+  // ================================================================
+
+  const BOSS_DEFS = [
+    { id: 'poopKing', name: 'КОРОЛЬ КАКАШКА', maxHp: 170 }
+    // add future bosses here — bossIndex cycles through this list
+  ];
+
+  const BOSS_REST_X = 300;      // where the boss hovers once it's done sliding in
+  const BOSS_Y_MIN = 60;
+  const BOSS_Y_MAX = H - GROUND_H - 60;
+  const PLAYER_SHOT_INTERVAL = 0.22;
+  const PLAYER_BULLET_SPEED = 430;
+  const BOSS_BULLET_SPEED = 130;
+  const PICKUP_GLYPH = { atk: 'dash', shield: 'shield', heal: 'heart', bigshot: 'widen' };
+  const PICKUP_COLOR = { atk: '#ff9f43', shield: '#ffd93d', heal: '#ff6b81', bigshot: '#5fe3ff' };
+
+  let bossActive = false;
+  let boss = null;              // { def, hp, maxHp, x, y, targetY, phase, introT, windup, windupType }
+  let bossIndex = 0;
+  let bossAttackTimer = 0;
+  let bossDash = null;          // active dash-through attack, if any
+  let bossOutro = null;         // 'victory' once hp hits 0, then a short pause
+  let bossOutroTimer = 0;
+
+  let bossBullets = [];
+  let bossWalls = [];           // thrown debris pairs — same idea as normal pipes
+  let bossPickups = [];
+  let bossPickupTimer = 0;
+
+  let playerBullets = [];
+  let playerShotTimer = 0;
+  let playerAtkBoost = 0;
+  let playerBigShotReady = false;
+
+  function startBossBattle() {
+    if (bossActive) return;
+    const def = BOSS_DEFS[bossIndex % BOSS_DEFS.length];
+    boss = { def: def, hp: def.maxHp, maxHp: def.maxHp, phase: 1,
+              x: W + 60, y: alex.y, targetY: alex.y, introT: 1.0,
+              windup: 0, windupType: null };
+    bossActive = true;
+    bossAttackTimer = 2.2;
+    bossDash = null;
+    bossOutro = null;
+    bossBullets = []; bossWalls = []; bossPickups = [];
+    bossPickupTimer = 3;
+    playerBullets = [];
+    playerShotTimer = 0;
+    playerAtkBoost = 0; playerBigShotReady = false;
+    shake = 6;
+    banners.push({ text: def.name + '!', life: 2, color: '#ff6b6b' });
+  }
+
+  function endBossBattle(victory) {
+    if (victory) bossIndex++;
+    bossActive = false;
+    boss = null;
+    bossOutro = null;
+  }
+
+  function fireBullet(fromY) {
+    const dmg = playerBigShotReady ? 14 : 3;
+    playerBullets.push({ x: alex.x + alex.w/2, y: fromY, vx: PLAYER_BULLET_SPEED, dmg: dmg, big: playerBigShotReady });
+    spawnBurst(alex.x + alex.w/2, fromY, playerBigShotReady ? '#ffd93d' : '#5fe3ff', playerBigShotReady ? 8 : 2);
+    playerBigShotReady = false;
+  }
+
+  function damageBoss(amount, x, y) {
+    if (!boss || bossOutro) return;
+    boss.hp = Math.max(0, boss.hp - amount);
+    spawnBurst(x, y, '#ffe89c', 4);
+    const frac = boss.hp / boss.maxHp;
+    const phase = frac > 0.7 ? 1 : (frac > 0.35 ? 2 : 3);
+    if (phase > boss.phase) {
+      boss.phase = phase;
+      shake = Math.max(shake, 8);
+      vib([20, 20, 20]);
+      banners.push({ text: phase === 3 ? 'ФИНАЛЬНАЯ ФАЗА!' : 'ВТОРАЯ ФАЗА!', life: 1.6, color: '#ff9f43' });
+    }
+    if (boss.hp <= 0) {
+      bossOutro = 'victory';
+      bossOutroTimer = 2.2;
+      bossWalls = []; bossBullets = [];
+      sndMilestone();
+      vib([30, 40, 30]);
+      shake = 12;
+      spawnBurst(boss.x, boss.y, '#ff6b6b', 24);
+      wallet += 40;
+      saveWallet();
+      const locked = SKINS.find(function(s){ return unlockedSkins.indexOf(s.id) === -1; });
+      if (locked) {
+        unlockedSkins.push(locked.id);
+        saveSkins();
+        popups.push({ x: alex.x, y: alex.y - 60, text: 'Новый скин: ' + locked.name + '!', life: 1.8, color: '#5fe3ff' });
+      }
+      banners.push({ text: 'ПОБЕДА! +40 монет', life: 2.2, color: '#7cfc00' });
+    }
+  }
+
+  // any boss hazard hitting the player reuses the exact same fairness rules
+  // as everything else in the game — a shield blocks it, an extra life
+  // absorbs it, otherwise it ends the run exactly like hitting the ground
+  function bossHitPlayer() {
+    if (invincibleTimer > 0) return;
+    const before = state;
+    triggerCaught();
+    if (state !== before) {
+      bossActive = false;
+      boss = null;
+    }
+  }
+
+  function spawnBossPickup() {
+    const types = ['atk', 'shield', 'heal', 'bigshot'];
+    const type = types[Math.floor(Math.random() * types.length)];
+    // big, and spread across the whole screen ahead of the player —
+    // not clustered next to the boss
+    bossPickups.push({
+      x: alex.x + 80 + Math.random() * (W - alex.x - 140),
+      y: BOSS_Y_MIN + Math.random() * (BOSS_Y_MAX - BOSS_Y_MIN),
+      type: type, r: 24
+    });
+  }
+
+  function beginBossAttack(type) {
+    boss.windupType = type;
+    // short, purely physical wind-up (the boss itself shakes/glows) —
+    // no on-screen arrows or captions, so it stays a little unpredictable
+    boss.windup = type === 'dash' ? 0.5 : (type === 'wallThrow' ? 0.4 : 0.35);
+  }
+
+  function resolveBossAttack() {
+    const type = boss.windupType;
+    boss.windupType = null;
+    if (type === 'wallThrow') {
+      // the boss's signature move: it hurls debris in from off-screen,
+      // exactly like a normal pipe, leaving one gap near the player
+      const gapY = clamp(alex.y - 80 + (Math.random() - 0.5) * 70, 20, H - GROUND_H - 170);
+      bossWalls.push({ x: W + 30, gapY: gapY, gapH: 160 });
+      sndWiden();
+    } else if (type === 'bullet') {
+      const shots = boss.phase >= 3 ? [-16, 0, 16] : [0];
+      for (let i = 0; i < shots.length; i++) {
+        bossBullets.push({ x: boss.x - 20, y: boss.y + shots[i], vx: -BOSS_BULLET_SPEED, r: 9 });
+      }
+      sndDash();
+    } else {
+      bossDash = { t: 0, duration: 0.8, laneY: boss.y, hit: false };
+      shake = Math.max(shake, 6);
+      sndPunch();
+    }
+  }
+
+  function updateBossOverlay(dt) {
+    if (!boss) return;
+
+    if (bossOutro) {
+      bossOutroTimer -= dt;
+      boss.y += (alex.y - boss.y) * Math.min(dt * 1.2, 1);
+      if (bossOutroTimer <= 0) endBossBattle(true);
+      return;
+    }
+
+    if (boss.introT > 0) {
+      boss.introT -= dt;
+      boss.x += (BOSS_REST_X - boss.x) * Math.min(dt * 3, 1);
+      boss.y += (alex.y - boss.y) * Math.min(dt * 2, 1);
+      boss.targetY = boss.y;
+      return;
+    }
+
+    // constant, lively movement — bobs up/down and sways side to side
+    // between attacks so it never just sits there; both widen and speed
+    // up in later phases. The two motions are out of phase so it reads
+    // as flying a loose loop rather than a straight line or perfect circle.
+    boss.wanderT = (boss.wanderT || 0) + dt;
+    if (!boss.windupType && !bossDash) {
+      const swaySpeed = 0.5 + boss.phase * 0.15;
+      const swayRange = 60 + boss.phase * 10;
+      const bobSpeed = 0.7 + boss.phase * 0.2;
+      const bobRange = 70 + boss.phase * 15;
+      const midY = (BOSS_Y_MIN + BOSS_Y_MAX) / 2;
+      const targetX = BOSS_REST_X + Math.sin(boss.wanderT * swaySpeed) * swayRange;
+      boss.targetY = clamp(midY + Math.sin(boss.wanderT * bobSpeed + 1.3) * bobRange, BOSS_Y_MIN, BOSS_Y_MAX);
+      boss.x += (targetX - boss.x) * Math.min(dt * 2, 1);
+    }
+    boss.y += (boss.targetY - boss.y) * Math.min(dt * 2.4, 1);
+
+    // player auto-fire
+    playerShotTimer -= dt;
+    if (playerShotTimer <= 0) {
+      playerShotTimer = PLAYER_SHOT_INTERVAL;
+      fireBullet(alex.y);
+      if (playerAtkBoost > 0) fireBullet(alex.y - 16);
+    }
+    if (playerAtkBoost > 0) playerAtkBoost = Math.max(0, playerAtkBoost - dt);
+    for (let i = playerBullets.length - 1; i >= 0; i--) {
+      const b = playerBullets[i];
+      b.x += b.vx * dt;
+      const dx = b.x - boss.x, dy = b.y - boss.y;
+      if (Math.sqrt(dx*dx + dy*dy) < 22) {
+        damageBoss(b.dmg, b.x, b.y);
+        playerBullets.splice(i, 1);
+      } else if (b.x > W + 20) {
+        playerBullets.splice(i, 1);
+      }
+    }
+
+    // big pickups, spread across the screen
+    bossPickupTimer -= dt;
+    if (bossPickupTimer <= 0) {
+      bossPickupTimer = 4.5 + Math.random() * 3;
+      spawnBossPickup();
+    }
+    for (let i = bossPickups.length - 1; i >= 0; i--) {
+      const p = bossPickups[i];
+      p.x -= pipeSpeed * dt;
+      const dx = alex.x - p.x, dy = alex.y - p.y;
+      if (Math.sqrt(dx*dx + dy*dy) < p.r + 18) {
+        if (p.type === 'atk') { playerAtkBoost = 8; popups.push({ x: alex.x, y: alex.y - 34, text: 'ДВОЙНОЙ ВЫСТРЕЛ!', life: 1.2, color: '#ff9f43' }); sndDash(); }
+        else if (p.type === 'shield') { invincibleTimer = Math.max(invincibleTimer, SHIELD_DURATION); popups.push({ x: alex.x, y: alex.y - 34, text: 'ЩИТ!', life: 1.2, color: '#ffd93d' }); sndShield(); }
+        else if (p.type === 'heal') { extraLives = Math.min(EXTRA_LIFE_MAX, extraLives + 1); popups.push({ x: alex.x, y: alex.y - 34, text: '❤️ +1 ЖИЗНЬ', life: 1.2, color: '#ff6b81' }); sndHeart(); }
+        else { playerBigShotReady = true; popups.push({ x: alex.x, y: alex.y - 34, text: 'МОЩНЫЙ ВЫСТРЕЛ ГОТОВ!', life: 1.2, color: '#ffd93d' }); sndGolden(); }
+        bossPickups.splice(i, 1);
+      } else if (p.x < -40) {
+        bossPickups.splice(i, 1);
+      }
+    }
+
+    // attack scheduling — "wallThrow" (fly through the gap) stays the boss's
+    // main move throughout, since it's the same skill as normal pipes;
+    // bullets and the rarer dash mix in more as the fight escalates
+    if (!boss.windupType && !bossDash) {
+      bossAttackTimer -= dt;
+      if (bossAttackTimer <= 0) {
+        const pool = boss.phase === 1 ? ['wallThrow', 'wallThrow', 'wallThrow', 'bullet']
+                   : boss.phase === 2 ? ['wallThrow', 'wallThrow', 'bullet', 'bullet']
+                   : ['wallThrow', 'bullet', 'bullet', 'dash'];
+        beginBossAttack(pool[Math.floor(Math.random() * pool.length)]);
+        bossAttackTimer = boss.phase === 1 ? 2.6 : (boss.phase === 2 ? 2.1 : 1.7);
+      }
+    }
+    if (boss.windupType) {
+      boss.windup -= dt;
+      if (boss.windup <= 0) resolveBossAttack();
+    }
+    if (bossDash) {
+      bossDash.t += dt;
+      const t = Math.min(bossDash.t / bossDash.duration, 1);
+      boss.x = lerp(BOSS_REST_X, -90, t);
+      boss.y = bossDash.laneY;
+      if (!bossDash.hit) {
+        const dx = alex.x - boss.x, dy = alex.y - boss.y;
+        if (Math.sqrt(dx*dx + dy*dy) < 32) {
+          bossDash.hit = true;
+          bossHitPlayer();
+        }
+      }
+      if (t >= 1) { bossDash = null; if (boss) boss.x = BOSS_REST_X; }
+    }
+
+    // boss bullets
+    for (let i = bossBullets.length - 1; i >= 0; i--) {
+      const b = bossBullets[i];
+      b.x += b.vx * dt;
+      const dx = alex.x - b.x, dy = alex.y - b.y;
+      if (Math.sqrt(dx*dx + dy*dy) < b.r + alex.w/2) {
+        bossBullets.splice(i, 1);
+        bossHitPlayer();
+      } else if (b.x < -30) {
+        bossBullets.splice(i, 1);
+      }
+    }
+
+    // thrown walls — travel at the same speed as the normal pipes so they
+    // blend into the existing rhythm instead of feeling like a separate system
+    for (let i = bossWalls.length - 1; i >= 0; i--) {
+      const w = bossWalls[i];
+      w.x -= pipeSpeed * dt;
+      const within = Math.abs(w.x - alex.x) < 26;
+      if (within && !w.passed) {
+        w.passed = true;
+        if (alex.y - alex.h/2 < w.gapY || alex.y + alex.h/2 > w.gapY + w.gapH) {
+          bossHitPlayer();
+        }
+      }
+      if (w.x < -60) bossWalls.splice(i, 1);
+    }
+  }
+
+  function drawBossHealthBar() {
+    if (!boss) return;
+    // lives at the bottom of the screen, just above the coin/hearts HUD
+    const barW = W - 40, barX = 20, barH = 16;
+    const barY = H - GROUND_H - 74;
+    ctx.fillStyle = '#fff';
+    setBannerFont(boss.def.name, 220, 12);
+    ctx.textAlign = 'center';
+    ctx.fillText(boss.def.name, W/2, barY - 8);
+    drawPanel(barX, barY, barW, barH, 8, 'rgba(20,10,10,0.6)', 'rgba(255,255,255,0.25)', 1.5);
+    const frac = clamp(boss.hp / boss.maxHp, 0, 1);
+    const g = ctx.createLinearGradient(barX, 0, barX + barW, 0);
+    g.addColorStop(0, '#ff6b6b'); g.addColorStop(1, '#c92c2c');
+    roundRectPath(barX + 2, barY + 2, (barW - 4) * frac, barH - 4, 6);
+    ctx.fillStyle = g; ctx.fill();
+  }
+
+  function renderBossOverlay() {
+    if (!boss) return;
+
+    // the only "warning" before an attack: the boss itself shakes and its
+    // face gets angrier the closer the attack is — no arrows, no captions
+    const winding = boss.windupType ? clamp(1 - boss.windup / 0.5, 0, 1) : 0;
+    const jitter = winding > 0 ? winding * 5 : 0;
+    const jx = jitter ? (Math.random() - 0.5) * jitter : 0;
+    const jy = jitter ? (Math.random() - 0.5) * jitter : 0;
+    const scale = 2.0;
+    const baseIntensity = clamp(0.25 + (boss.phase - 1) * 0.25, 0, 1);
+    const intensity = clamp(baseIntensity + winding * 0.55, 0, 1);
+    drawPoop(boss.x + jx, boss.y + jy, scale, intensity);
+
+    // small crown so it reads clearly as a boss, not just a bigger chaser
+    ctx.save();
+    ctx.translate(boss.x, boss.y - 44);
+    ctx.scale(0.7, 0.7);
+    ctx.fillStyle = '#ffd93d';
+    ctx.beginPath();
+    ctx.moveTo(-14, 8); ctx.lineTo(-14, -4); ctx.lineTo(-7, 4); ctx.lineTo(0, -8);
+    ctx.lineTo(7, 4); ctx.lineTo(14, -4); ctx.lineTo(14, 8); ctx.closePath();
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(0,0,0,0.3)'; ctx.lineWidth = 1; ctx.stroke();
+    ctx.restore();
+
+    for (let i = 0; i < bossWalls.length; i++) {
+      const w = bossWalls[i];
+      ctx.fillStyle = '#6b4423';
+      ctx.fillRect(w.x - 18, 0, 36, w.gapY);
+      ctx.fillRect(w.x - 18, w.gapY + w.gapH, 36, H - GROUND_H - (w.gapY + w.gapH));
+      ctx.fillStyle = 'rgba(255,255,255,0.1)';
+      ctx.fillRect(w.x - 18, 0, 6, w.gapY);
+      ctx.fillRect(w.x - 18, w.gapY + w.gapH, 6, H - GROUND_H - (w.gapY + w.gapH));
+    }
+    // poop shots — little chunks flung from the boss, themed to match it,
+    // with a faint trailing smear since they fly leftward
+    for (let i = 0; i < bossBullets.length; i++) {
+      const b = bossBullets[i];
+      ctx.save();
+      ctx.globalAlpha = 0.35;
+      drawPoop(b.x + 14, b.y, 0.32, 0.3);
+      ctx.restore();
+      drawPoop(b.x, b.y, 0.42, 0.55);
+    }
+    // big pickups, easy to spot and grab
+    for (let i = 0; i < bossPickups.length; i++) {
+      const p = bossPickups[i];
+      const pulse = 1 + Math.sin(frame * 0.15 + i) * 0.12;
+      const glyphColor = PICKUP_COLOR[p.type];
+      ctx.save();
+      ctx.globalAlpha = 0.3;
+      ctx.fillStyle = glyphColor;
+      ctx.beginPath(); ctx.arc(p.x, p.y, p.r * pulse, 0, Math.PI*2); ctx.fill();
+      ctx.restore();
+      ICON_GLYPHS[PICKUP_GLYPH[p.type]](p.x, p.y, p.r * 0.7, glyphColor);
+    }
+    for (let i = 0; i < playerBullets.length; i++) {
+      const b = playerBullets[i];
+      ctx.fillStyle = b.big ? '#ffd93d' : '#5fe3ff';
+      ctx.beginPath(); ctx.ellipse(b.x, b.y, b.big ? 10 : 6, b.big ? 5 : 3, 0, 0, Math.PI*2); ctx.fill();
+    }
+
+    drawBossHealthBar();
   }
 
   function frameLoop(ts) {
