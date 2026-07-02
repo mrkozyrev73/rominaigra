@@ -221,6 +221,33 @@
   let muted = false;
   try { muted = localStorage.getItem('alexPoopMuted') === '1'; } catch(e){}
 
+  // ---------- skins & wallet ----------
+  const SKINS = [
+    { id: 'steve',    name: 'Стив',     cost: 0 },
+    { id: 'alex',     name: 'Алекс',    cost: 15 },
+    { id: 'zombie',   name: 'Зомби',    cost: 25 },
+    { id: 'skeleton', name: 'Скелет',   cost: 35 },
+    { id: 'creeper',  name: 'Крипер',   cost: 50 },
+    { id: 'enderman', name: 'Эндермен', cost: 75 }
+  ];
+  let wallet = 0;
+  try { wallet = parseInt(localStorage.getItem('alexPoopWallet') || '0', 10) || 0; } catch(e){}
+  let unlockedSkins = ['steve'];
+  try {
+    const su = JSON.parse(localStorage.getItem('alexPoopSkinsUnlocked') || '["steve"]');
+    if (Array.isArray(su)) unlockedSkins = su;
+    if (unlockedSkins.indexOf('steve') === -1) unlockedSkins.push('steve');
+  } catch(e){}
+  let currentSkin = 'steve';
+  try {
+    const cs = localStorage.getItem('alexPoopSkin');
+    if (cs && unlockedSkins.indexOf(cs) !== -1) currentSkin = cs;
+  } catch(e){}
+
+  function saveWallet() { try { localStorage.setItem('alexPoopWallet', String(wallet)); } catch(e){} }
+  function saveSkins() { try { localStorage.setItem('alexPoopSkinsUnlocked', JSON.stringify(unlockedSkins)); } catch(e){} }
+  function saveCurrentSkin() { try { localStorage.setItem('alexPoopSkin', currentSkin); } catch(e){} }
+
   // weather
   let weather = 'clear';
   let weatherTimer = 16;
@@ -417,6 +444,16 @@
   }
   function pointInRect(px, py, r) { return px >= r.x && px <= r.x + r.w && py >= r.y && py <= r.y + r.h; }
 
+  const SHOP_BTN = { x: W/2 - 110, y: 566, w: 220, h: 34 };
+  const SHOP_BACK_BTN = { x: 10, y: 10, w: 76, h: 30 };
+  function shopCardRect(i) {
+    const col = i % 3, row = Math.floor(i / 3);
+    const cardW = 110, cardH = 150, gap = 10;
+    const totalW = 3 * cardW + 2 * gap;
+    const startX = (W - totalW) / 2;
+    return { x: startX + col * (cardW + gap), y: 100 + row * (cardH + gap), w: cardW, h: cardH };
+  }
+
   function getCanvasPos(evt) {
     const rect = canvas.getBoundingClientRect();
     const scaleX = W / rect.width, scaleY = H / rect.height;
@@ -455,6 +492,37 @@
             return;
           }
         }
+        if (pointInRect(pos.x, pos.y, SHOP_BTN)) {
+          state = 'shop';
+          return;
+        }
+      }
+      if (state === 'shop') {
+        if (pointInRect(pos.x, pos.y, SHOP_BACK_BTN)) {
+          state = 'ready';
+          return;
+        }
+        for (let i = 0; i < SKINS.length; i++) {
+          if (pointInRect(pos.x, pos.y, shopCardRect(i))) {
+            const skin = SKINS[i];
+            if (unlockedSkins.indexOf(skin.id) !== -1) {
+              currentSkin = skin.id;
+              saveCurrentSkin();
+            } else if (wallet >= skin.cost) {
+              wallet -= skin.cost;
+              saveWallet();
+              unlockedSkins.push(skin.id);
+              saveSkins();
+              currentSkin = skin.id;
+              saveCurrentSkin();
+              sndHeart();
+            } else {
+              sndPunch();
+            }
+            return;
+          }
+        }
+        return;
       }
     }
     ac();
@@ -640,6 +708,8 @@
         const dx3 = alex.x - c.x, dy3 = alex.y - c.y;
         if (Math.sqrt(dx3*dx3 + dy3*dy3) < c.r + 14) {
           coinCount++;
+          wallet++;
+          saveWallet();
           sndCoin();
           spawnBurst(c.x, c.y, '#ffd93d', 5);
           coinItems.splice(i, 1);
@@ -1005,15 +1075,94 @@
     ctx.restore();
   }
 
-  function drawCoin(x, y) {
-    const spin = Math.abs(Math.sin(frame * 0.08 + x * 0.05));
+  function drawCoinIcon(x, y, r) {
     ctx.save();
     ctx.translate(x, y);
-    ctx.scale(0.4 + spin * 0.6, 1);
-    ctx.fillStyle = '#ffd93d';
-    ctx.beginPath(); ctx.arc(0, 0, 9, 0, Math.PI*2); ctx.fill();
-    ctx.strokeStyle = '#e8b923'; ctx.lineWidth = 2;
-    ctx.beginPath(); ctx.arc(0, 0, 6.5, 0, Math.PI*2); ctx.stroke();
+    ctx.fillStyle = '#c8860f';
+    ctx.beginPath(); ctx.arc(0, 0, r, 0, Math.PI*2); ctx.fill();
+    const g = ctx.createRadialGradient(-r*0.3, -r*0.3, r*0.1, 0, 0, r*0.85);
+    g.addColorStop(0, '#fff6c9');
+    g.addColorStop(0.45, '#ffe066');
+    g.addColorStop(1, '#f0b400');
+    ctx.fillStyle = g;
+    ctx.beginPath(); ctx.arc(0, 0, r*0.82, 0, Math.PI*2); ctx.fill();
+    ctx.strokeStyle = 'rgba(255,255,255,0.55)'; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.arc(0, 0, r*0.56, 0, Math.PI*2); ctx.stroke();
+    ctx.fillStyle = 'rgba(255,255,255,0.75)';
+    ctx.beginPath(); ctx.ellipse(-r*0.32, -r*0.36, r*0.26, r*0.14, -0.6, 0, Math.PI*2); ctx.fill();
+    ctx.restore();
+  }
+
+  function measureIconParts(parts) {
+    let total = 0; const gap = 4;
+    for (let i = 0; i < parts.length; i++) {
+      const p = parts[i];
+      if (p.type === 'text') { ctx.font = p.font; total += ctx.measureText(p.value).width; }
+      else total += p.r * 2;
+      total += gap;
+    }
+    return total - gap;
+  }
+  function drawIconParts(parts, x, y) {
+    const gap = 4;
+    for (let i = 0; i < parts.length; i++) {
+      const p = parts[i];
+      if (p.type === 'text') {
+        ctx.font = p.font; ctx.textAlign = 'left'; ctx.fillStyle = p.color;
+        ctx.fillText(p.value, x, y);
+        x += ctx.measureText(p.value).width + gap;
+      } else {
+        drawCoinIcon(x + p.r, y - p.r*0.75, p.r);
+        x += p.r * 2 + gap;
+      }
+    }
+  }
+  function drawIconPartsCentered(parts, cx, y) {
+    drawIconParts(parts, cx - measureIconParts(parts)/2, y);
+  }
+
+  function drawCoin(x, y) {
+    const spin = Math.abs(Math.sin(frame * 0.08 + x * 0.05));
+    const squash = 0.35 + spin * 0.65;
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.scale(squash, 1);
+
+    // drop shadow disc for a bit of depth
+    ctx.fillStyle = 'rgba(120, 75, 10, 0.35)';
+    ctx.beginPath(); ctx.arc(0.6, 1, 9.2, 0, Math.PI*2); ctx.fill();
+
+    // outer rim (darker gold)
+    ctx.fillStyle = '#c8860f';
+    ctx.beginPath(); ctx.arc(0, 0, 9.2, 0, Math.PI*2); ctx.fill();
+
+    // inner face with metallic gradient
+    const g = ctx.createRadialGradient(-2.5, -2.5, 1, 0, 0, 7.6);
+    g.addColorStop(0, '#fff6c9');
+    g.addColorStop(0.45, '#ffe066');
+    g.addColorStop(1, '#f0b400');
+    ctx.fillStyle = g;
+    ctx.beginPath(); ctx.arc(0, 0, 7.4, 0, Math.PI*2); ctx.fill();
+
+    // bezel ring
+    ctx.strokeStyle = 'rgba(255,255,255,0.55)';
+    ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.arc(0, 0, 5.3, 0, Math.PI*2); ctx.stroke();
+
+    // coin emblem (simple star, only visible when facing us enough)
+    if (squash > 0.55) {
+      ctx.fillStyle = 'rgba(200,134,15,0.8)';
+      ctx.font = 'bold 8px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText('★', 0.3, 3.2);
+    }
+
+    // specular highlight
+    ctx.fillStyle = 'rgba(255,255,255,0.75)';
+    ctx.beginPath();
+    ctx.ellipse(-3, -3.4, 2.4, 1.3, -0.6, 0, Math.PI*2);
+    ctx.fill();
+
     ctx.restore();
   }
 
@@ -1048,10 +1197,59 @@
     }
   }
 
-  function drawAlex(x, y, rot) {
+  function drawCharacter(x, y, rot, skin) {
     ctx.save();
     ctx.translate(x, y);
     ctx.rotate(rot * 0.3);
+    switch (skin) {
+      case 'alex': drawSkinAlex(); break;
+      case 'zombie': drawSkinZombie(); break;
+      case 'skeleton': drawSkinSkeleton(); break;
+      case 'creeper': drawSkinCreeper(); break;
+      case 'enderman': drawSkinEnderman(); break;
+      default: drawSkinSteve(); break;
+    }
+    ctx.restore();
+  }
+
+  function drawSkinSteve() {
+    // legs
+    ctx.fillStyle = '#3b3b6b';
+    ctx.fillRect(-10, 9, 8, 13);
+    ctx.fillRect(2, 9, 8, 13);
+    ctx.fillStyle = '#2c2c52';
+    ctx.fillRect(-10, 19, 8, 3);
+    ctx.fillRect(2, 19, 8, 3);
+    // torso shirt (cyan)
+    ctx.fillStyle = '#4fc1c5';
+    ctx.fillRect(-11, -9, 22, 18);
+    ctx.fillStyle = '#3a9498';
+    ctx.fillRect(-11, 5, 22, 4);
+    // arms
+    ctx.fillStyle = '#cc9a72';
+    ctx.fillRect(-16, -7, 5, 15);
+    ctx.fillRect(11, -7, 5, 15);
+    ctx.fillStyle = '#3a9498';
+    ctx.fillRect(-16, -7, 5, 5);
+    ctx.fillRect(11, -7, 5, 5);
+    // head
+    ctx.fillStyle = '#cc9a72';
+    ctx.fillRect(-11, -27, 22, 19);
+    // hair (short brown flat-top)
+    ctx.fillStyle = '#4a2f1a';
+    ctx.fillRect(-12, -28, 24, 7);
+    ctx.fillRect(-12, -21, 3, 5);
+    ctx.fillRect(9, -21, 3, 5);
+    // eyes
+    ctx.fillStyle = '#2b2b2b';
+    ctx.fillRect(-6, -18, 3, 4);
+    ctx.fillRect(2, -18, 3, 4);
+    // mouth
+    ctx.fillStyle = '#7a4a33';
+    ctx.fillRect(-3, -11, 6, 2);
+  }
+
+  function drawSkinAlex() {
     // legs
     ctx.fillStyle = '#3e6fae';
     ctx.fillRect(-10, 9, 8, 13);
@@ -1086,7 +1284,132 @@
     // mouth
     ctx.fillStyle = '#7a4a33';
     ctx.fillRect(-3, -11, 6, 2);
+  }
+
+  function drawSkinZombie() {
+    // legs
+    ctx.fillStyle = '#33475a';
+    ctx.fillRect(-10, 9, 8, 13);
+    ctx.fillRect(2, 9, 8, 13);
+    ctx.fillStyle = '#28394a';
+    ctx.fillRect(-10, 19, 8, 3);
+    ctx.fillRect(2, 19, 8, 3);
+    // torso ragged shirt
+    ctx.fillStyle = '#4a6b57';
+    ctx.fillRect(-11, -9, 22, 17);
+    ctx.fillRect(-11, 6, 5, 3);
+    ctx.fillRect(-2, 7, 4, 3);
+    ctx.fillRect(6, 6, 5, 2);
+    ctx.fillStyle = '#3a5544';
+    ctx.fillRect(-11, 4, 22, 3);
+    // arms (skin, hanging)
+    ctx.fillStyle = '#7a8f5a';
+    ctx.fillRect(-16, -6, 5, 17);
+    ctx.fillRect(11, -6, 5, 17);
+    ctx.fillStyle = '#3a5544';
+    ctx.fillRect(-16, -6, 5, 4);
+    ctx.fillRect(11, -6, 5, 4);
+    // head
+    ctx.fillStyle = '#7a8f5a';
+    ctx.fillRect(-11, -27, 22, 19);
+    ctx.fillStyle = '#5c6e46';
+    ctx.fillRect(-11, -27, 22, 4);
+    // eyes (hollow, dark)
+    ctx.fillStyle = '#1a1a1a';
+    ctx.fillRect(-6, -18, 3, 4);
+    ctx.fillRect(2, -18, 3, 4);
+    // mouth (open)
+    ctx.fillStyle = '#1a1a1a';
+    ctx.fillRect(-3, -11, 6, 3);
+  }
+
+  function drawSkinSkeleton() {
+    // legs
+    ctx.fillStyle = '#d8d8ce';
+    ctx.fillRect(-10, 9, 8, 13);
+    ctx.fillRect(2, 9, 8, 13);
+    ctx.fillStyle = '#b9b9ac';
+    ctx.fillRect(-10, 19, 8, 3);
+    ctx.fillRect(2, 19, 8, 3);
+    // torso (ribs)
+    ctx.fillStyle = '#e8e8df';
+    ctx.fillRect(-11, -9, 22, 18);
+    ctx.fillStyle = '#a9a99c';
+    for (let ry = -6; ry < 6; ry += 4) ctx.fillRect(-9, ry, 18, 2);
+    // arms (bone)
+    ctx.fillStyle = '#e0e0d5';
+    ctx.fillRect(-16, -7, 5, 15);
+    ctx.fillRect(11, -7, 5, 15);
+    ctx.fillStyle = '#b9b9ac';
+    ctx.fillRect(-16, -7, 5, 3);
+    ctx.fillRect(11, -7, 5, 3);
+    // head
+    ctx.fillStyle = '#e0e0d5';
+    ctx.fillRect(-11, -27, 22, 19);
+    // eye sockets (hollow black)
+    ctx.fillStyle = '#141414';
+    ctx.fillRect(-7, -19, 4, 5);
+    ctx.fillRect(3, -19, 4, 5);
+    // nose/mouth suggestion
+    ctx.fillStyle = '#8f8f82';
+    ctx.fillRect(-1, -13, 2, 2);
+  }
+
+  function drawSkinCreeper() {
+    // legs (short, green, four-leg illusion via split)
+    ctx.fillStyle = '#4c9a3f';
+    ctx.fillRect(-10, 12, 8, 10);
+    ctx.fillRect(2, 12, 8, 10);
+    ctx.fillStyle = '#3d7d32';
+    ctx.fillRect(-10, 20, 8, 2);
+    ctx.fillRect(2, 20, 8, 2);
+    // torso (blocky green with camo patches, no arms)
+    ctx.fillStyle = '#5cae4a';
+    ctx.fillRect(-12, -9, 24, 21);
+    ctx.fillStyle = '#3d7d32';
+    ctx.fillRect(-12, -4, 8, 7);
+    ctx.fillRect(4, 2, 8, 6);
+    ctx.fillRect(-4, -8, 7, 5);
+    // head
+    ctx.fillStyle = '#5cae4a';
+    ctx.fillRect(-12, -28, 24, 20);
+    ctx.fillStyle = '#3d7d32';
+    ctx.fillRect(-12, -28, 8, 7);
+    ctx.fillRect(6, -18, 6, 6);
+    // face (classic creeper pattern)
+    ctx.fillStyle = '#1a1a1a';
+    ctx.fillRect(-7, -21, 5, 5);
+    ctx.fillRect(2, -21, 5, 5);
+    ctx.fillRect(-3, -16, 6, 5);
+    ctx.fillRect(-3, -11, 3, 4);
+    ctx.fillRect(0, -11, 3, 4);
+  }
+
+  function drawSkinEnderman() {
+    // legs (thin, tall)
+    ctx.fillStyle = '#160c1e';
+    ctx.fillRect(-9, 8, 6, 16);
+    ctx.fillRect(3, 8, 6, 16);
+    // torso (thin, tall, dark)
+    ctx.fillStyle = '#1c1226';
+    ctx.fillRect(-10, -12, 20, 20);
+    // arms (long thin)
+    ctx.fillStyle = '#160c1e';
+    ctx.fillRect(-15, -10, 4, 24);
+    ctx.fillRect(11, -10, 4, 24);
+    // head
+    ctx.fillStyle = '#1c1226';
+    ctx.fillRect(-10, -31, 20, 19);
+    // glowing purple eyes
+    ctx.save();
+    ctx.globalAlpha = 0.4;
+    ctx.fillStyle = '#b16bff';
+    ctx.fillRect(-9, -24, 8, 8);
+    ctx.fillRect(1, -24, 8, 8);
     ctx.restore();
+    ctx.fillStyle = '#c98bff';
+    ctx.fillRect(-7, -22, 4, 4);
+    ctx.fillRect(3, -22, 4, 4);
   }
 
   function drawPoop(x, y, scale, intensity) {
@@ -1199,6 +1522,98 @@
     }
   }
 
+  function drawShopButton() {
+    const r = SHOP_BTN;
+    ctx.fillStyle = 'rgba(0,0,0,0.35)';
+    ctx.fillRect(r.x, r.y, r.w, r.h);
+    ctx.strokeStyle = 'rgba(255,255,255,0.4)';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(r.x, r.y, r.w, r.h);
+    ctx.fillStyle = '#fff';
+    ctx.font = 'bold 14px sans-serif';
+    ctx.textAlign = 'center';
+    drawIconPartsCentered([
+      { type: 'text', value: '🎨 Скины  ·', font: 'bold 14px sans-serif', color: '#fff' },
+      { type: 'coin', r: 7 },
+      { type: 'text', value: String(wallet), font: 'bold 14px sans-serif', color: '#ffd93d' }
+    ], r.x + r.w/2, r.y + r.h/2 + 5);
+  }
+
+  function drawShopCardPreview(x, y, skinId) {
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.scale(1.1, 1.1);
+    drawCharacter(0, 20, 0, skinId);
+    ctx.restore();
+  }
+
+  function drawShop() {
+    ctx.fillStyle = '#12182b';
+    ctx.fillRect(0, 0, W, H);
+    ctx.fillStyle = '#fff';
+    ctx.font = 'bold 22px "Segoe UI", sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('Скины', W/2, 45);
+    ctx.font = 'bold 15px sans-serif';
+    ctx.fillStyle = '#ffd93d';
+    drawIconPartsCentered([
+      { type: 'coin', r: 9 },
+      { type: 'text', value: String(wallet), font: 'bold 15px sans-serif', color: '#ffd93d' }
+    ], W/2, 72);
+
+    for (let i = 0; i < SKINS.length; i++) {
+      const skin = SKINS[i];
+      const r = shopCardRect(i);
+      const unlocked = unlockedSkins.indexOf(skin.id) !== -1;
+      const active = skin.id === currentSkin;
+
+      ctx.fillStyle = active ? 'rgba(255,217,61,0.22)' : 'rgba(255,255,255,0.06)';
+      ctx.fillRect(r.x, r.y, r.w, r.h);
+      ctx.strokeStyle = active ? '#ffd93d' : 'rgba(255,255,255,0.25)';
+      ctx.lineWidth = active ? 3 : 1.5;
+      ctx.strokeRect(r.x, r.y, r.w, r.h);
+
+      if (!unlocked) {
+        ctx.save();
+        ctx.globalAlpha = 0.55;
+        drawShopCardPreview(r.x + r.w/2, r.y + 46, skin.id);
+        ctx.restore();
+      } else {
+        drawShopCardPreview(r.x + r.w/2, r.y + 46, skin.id);
+      }
+
+      ctx.fillStyle = '#fff';
+      ctx.font = 'bold 13px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText(skin.name, r.x + r.w/2, r.y + r.h - 34);
+
+      if (active) {
+        ctx.fillStyle = '#ffd93d';
+        ctx.font = 'bold 12px sans-serif';
+        ctx.fillText('Выбрано', r.x + r.w/2, r.y + r.h - 14);
+      } else if (unlocked) {
+        ctx.fillStyle = '#7cfc00';
+        ctx.font = 'bold 12px sans-serif';
+        ctx.fillText('Выбрать', r.x + r.w/2, r.y + r.h - 14);
+      } else {
+        drawIconPartsCentered([
+          { type: 'coin', r: 7 },
+          { type: 'text', value: String(skin.cost), font: 'bold 12px sans-serif', color: wallet >= skin.cost ? '#5fe3ff' : '#888' }
+        ], r.x + r.w/2, r.y + r.h - 14);
+      }
+    }
+
+    const b = SHOP_BACK_BTN;
+    ctx.fillStyle = 'rgba(0,0,0,0.35)';
+    ctx.fillRect(b.x, b.y, b.w, b.h);
+    ctx.strokeStyle = 'rgba(255,255,255,0.4)';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(b.x, b.y, b.w, b.h);
+    ctx.fillStyle = '#fff';
+    ctx.font = 'bold 13px sans-serif';
+    ctx.fillText('← Назад', b.x + b.w/2, b.y + b.h/2 + 5);
+  }
+
   function render() {
     ctx.save();
     if (shake > 0) {
@@ -1252,7 +1667,7 @@
       ctx.beginPath(); ctx.arc(0, 0, 26 * glowPulse, 0, Math.PI*2); ctx.fill();
       ctx.restore();
     }
-    drawAlex(alex.x, alex.y, alex.rot);
+    drawCharacter(alex.x, alex.y, alex.rot, currentSkin);
 
     for (let i = 0; i < particles.length; i++) {
       const pt = particles[i];
@@ -1281,10 +1696,10 @@
       if (multiplier > 1) {
         drawTextCentered('x' + multiplier, 108, 20, '#ff9f43');
       }
-      ctx.textAlign = 'left';
-      ctx.font = 'bold 15px sans-serif';
-      ctx.fillStyle = '#ffd93d';
-      ctx.fillText('🪙 ' + coinCount, 12, H - GROUND_H - 10);
+      drawIconParts([
+        { type: 'coin', r: 8 },
+        { type: 'text', value: String(coinCount), font: 'bold 15px sans-serif', color: '#ffd93d' }
+      ], 12, H - GROUND_H - 10);
       if (extraLives > 0) {
         ctx.fillStyle = '#ff6b81';
         ctx.fillText('❤️ x' + extraLives, 12, H - GROUND_H - 32);
@@ -1333,6 +1748,7 @@
       drawTextCentered('от какашки!', 224, 30, '#fff', 'bold', true);
       drawTextCentered('Тапай, чтобы не упасть', 460, 16, '#fff', '600', true);
       drawDifficultyButtons();
+      drawShopButton();
       drawNameButton();
       if (best > 0) drawTextCentered('Рекорд: ' + best, 40, 16, '#fff2b0', 'bold', true);
     }
@@ -1342,9 +1758,16 @@
       ctx.fillRect(0, 0, W, H);
       drawTextCentered('ПОЙМАЛА!', 230, 40, '#ff6b6b');
       drawTextCentered('Счёт: ' + score, 288, 24, '#fff');
-      drawTextCentered('🪙 Монеты: ' + coinCount, 318, 18, '#ffd93d');
+      drawIconPartsCentered([
+        { type: 'coin', r: 9 },
+        { type: 'text', value: 'Монеты: ' + coinCount, font: 'bold 18px sans-serif', color: '#ffd93d' }
+      ], W/2, 318);
       drawTextCentered('Рекорд: ' + best, 348, 20, '#fff2b0');
       drawTextCentered('Нажми, чтобы попробовать снова', 400, 16, '#fff', '600');
+    }
+
+    if (state === 'shop') {
+      drawShop();
     }
 
     drawMuteButton();
